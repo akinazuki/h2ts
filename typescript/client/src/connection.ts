@@ -281,6 +281,7 @@ export class H2Connection {
         if (stream) {
           stream.receiveReset(frame.errorCode);
           this.streams.delete(frame.streamId);
+          this.wakeStreamSlots();
         }
         return;
       }

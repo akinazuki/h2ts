@@ -488,6 +488,32 @@ describe("receive path: max concurrent streams", () => {
     const res2 = await r2;
     expect(res2.status).toBe(200);
   }, 8000);
+
+  it("admits a parked request when the peer resets the stream holding the slot", async () => {
+    const { transport, clientReader, serverWriter } = mockTransport();
+    const conn = connect(transport);
+    const frames = new FrameReader(clientReader);
+
+    const r1 = conn.request({ path: "/a", authority: "e" });
+    r1.catch(() => {});
+    await frames.until((f) => f.type === FrameType.HEADERS && f.streamId === 1);
+    await serverWriter.write(
+      serializeFrame({ type: FrameType.SETTINGS, streamId: 0, ack: false, settings: { maxConcurrentStreams: 1 } }),
+    );
+    await frames.until((f) => f.type === FrameType.SETTINGS && f.ack === true);
+
+    const r2 = conn.request({ path: "/b", authority: "e" });
+    r2.catch(() => {});
+    await new Promise((r) => setTimeout(r, 15));
+    expect(conn.activeStreams).toBe(1);
+
+    await serverWriter.write(
+      serializeFrame({ type: FrameType.RST_STREAM, streamId: 1, errorCode: 7 }),
+    );
+    await expect(r1).rejects.toThrow();
+
+    await frames.until((f) => f.type === FrameType.HEADERS && f.streamId === 3);
+  }, 3000);
 });
 
 describe("receive path: RST_STREAM", () => {
