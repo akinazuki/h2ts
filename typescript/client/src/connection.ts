@@ -404,6 +404,26 @@ export class H2Connection {
     for (const resolve of pending) resolve();
   }
 
+  /** Throws unless a new request may still be opened. A request aborted here has
+   * no stream yet, so nothing is reset (§6.4 forbids RST_STREAM on an idle one). */
+  private assertCanOpenRequest(signal: AbortSignal | undefined): void {
+    if (this.closedFlag) throw this.closeError ?? new H2Error("INTERNAL_ERROR", "connection closed");
+    if (this.goawayReceived) throw new H2Error("REFUSED_STREAM", "connection is going away");
+    if (signal?.aborted) throw abortError(signal);
+  }
+
+  /** Park until a stream slot may have freed up, or `signal` aborts. */
+  private waitForStreamSlot(signal: AbortSignal | undefined): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const wake = (): void => {
+        signal?.removeEventListener("abort", wake);
+        resolve();
+      };
+      this.streamSlotWaiters.push(wake);
+      signal?.addEventListener("abort", wake, { once: true });
+    });
+  }
+
   private handlePush(parentId: number, promisedId: number, requestHeaders: Header[]): void {
     if (promisedId > this.highestPromised) this.highestPromised = promisedId;
 
@@ -442,17 +462,16 @@ export class H2Connection {
   // --- public API ---
 
   async request(init: H2RequestInit): Promise<H2Response> {
-    if (this.closedFlag) throw this.closeError ?? new H2Error("INTERNAL_ERROR", "connection closed");
-    if (this.goawayReceived) throw new H2Error("REFUSED_STREAM", "connection is going away");
+    this.assertCanOpenRequest(init.signal);
     await this.ready;
 
     // Respect the peer's SETTINGS_MAX_CONCURRENT_STREAMS: park until a slot frees
     // (§5.1.2). There is no await between the passing check and the synchronous
     // reservation below, so waking waiters can never over-allocate the limit.
-    while (!this.canOpenStream()) {
-      if (this.closedFlag) throw this.closeError ?? new H2Error("INTERNAL_ERROR", "connection closed");
-      if (this.goawayReceived) throw new H2Error("REFUSED_STREAM", "connection is going away");
-      await new Promise<void>((resolve) => this.streamSlotWaiters.push(resolve));
+    for (;;) {
+      this.assertCanOpenRequest(init.signal);
+      if (this.canOpenStream()) break;
+      await this.waitForStreamSlot(init.signal);
     }
 
     const id = this.nextStreamId;
@@ -473,10 +492,6 @@ export class H2Connection {
     const hasBody = !bodyIsEmpty(init.body);
 
     if (init.signal) {
-      if (init.signal.aborted) {
-        this.resetStream(id, "CANCEL");
-        throw abortError(init.signal);
-      }
       init.signal.addEventListener("abort", () => {
         if (this.streams.has(id)) {
           // Fail with the abort reason first, so resetStream's generic fail is a no-op.

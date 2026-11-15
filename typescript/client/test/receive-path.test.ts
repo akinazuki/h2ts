@@ -881,3 +881,73 @@ describe("cancellation: abandoning a response body", () => {
     expect(before.some((f) => f.type === FrameType.RST_STREAM)).toBe(false);
   }, 8000);
 });
+
+describe("cancellation: aborting a request before it opens a stream", () => {
+  it("puts nothing on the wire for a request whose signal is already aborted", async () => {
+    const { transport, clientReader } = mockTransport();
+    const conn = connect(transport);
+    const frames = new FrameReader(clientReader);
+
+    const seen: Frame[] = [];
+    void (async () => {
+      try {
+        for (;;) seen.push(await frames.next());
+      } catch {
+        /* closed */
+      }
+    })();
+
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      conn.request({ path: "/a", authority: "e", signal: controller.signal }),
+    ).rejects.toThrow();
+
+    const next = conn.request({ path: "/b", authority: "e" });
+    next.catch(() => {});
+    const start = Date.now();
+    while (!seen.some((f) => f.type === FrameType.HEADERS)) {
+      if (Date.now() - start > 2000) throw new Error("the follow-up request never opened a stream");
+      await new Promise((r) => setTimeout(r, 15));
+    }
+    expect(seen.some((f) => f.type === FrameType.RST_STREAM)).toBe(false);
+    expect(seen.find((f) => f.type === FrameType.HEADERS)?.streamId).toBe(1);
+  }, 3000);
+
+  it("rejects a parked request when its signal aborts, without opening a stream", async () => {
+    const { transport, clientReader, serverWriter } = mockTransport();
+    const conn = connect(transport);
+    const frames = new FrameReader(clientReader);
+
+    const r1 = conn.request({ path: "/a", authority: "e" });
+    r1.catch(() => {});
+    await frames.until((f) => f.type === FrameType.HEADERS && f.streamId === 1);
+    await serverWriter.write(
+      serializeFrame({ type: FrameType.SETTINGS, streamId: 0, ack: false, settings: { maxConcurrentStreams: 1 } }),
+    );
+    await frames.until((f) => f.type === FrameType.SETTINGS && f.ack === true);
+
+    const controller = new AbortController();
+    const r2 = conn.request({ path: "/b", authority: "e", signal: controller.signal });
+    r2.catch(() => {});
+    await new Promise((r) => setTimeout(r, 15));
+    controller.abort();
+    await expect(r2).rejects.toThrow();
+
+    const r3 = conn.request({ path: "/c", authority: "e" });
+    r3.catch(() => {});
+    const head = new HpackEncoder().encode([{ name: ":status", value: "200" }]);
+    await serverWriter.write(
+      serializeFrame({ type: FrameType.HEADERS, streamId: 1, headerBlockFragment: head, endStream: true, endHeaders: true }),
+    );
+
+    const before: Frame[] = [];
+    let frame = await frames.next();
+    while (frame.type !== FrameType.HEADERS) {
+      before.push(frame);
+      frame = await frames.next();
+    }
+    expect(before.some((f) => f.type === FrameType.RST_STREAM)).toBe(false);
+    expect(frame.streamId).toBe(3);
+  }, 3000);
+});
