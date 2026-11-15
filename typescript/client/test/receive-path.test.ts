@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { concatBytes, decodeUtf8, encodeUtf8 } from "../src/bytes.js";
 import { connect } from "../src/client.js";
+import { H2Error } from "../src/errors.js";
 import { FrameDecoder, serializeFrame } from "../src/frames/codec.js";
 import { FrameType, type Frame } from "../src/frames/types.js";
 import { HpackDecoder, HpackEncoder } from "../src/hpack/hpack.js";
@@ -675,6 +676,63 @@ describe("receive path: GOAWAY", () => {
     await expect(reqP).rejects.toThrow();
     expect(conn.isClosed).toBe(true);
   }, 8000);
+
+  it("carries the GOAWAY debug data on the error and on the connection", async () => {
+    const { transport, clientReader, serverWriter } = mockTransport();
+    const conn = connect(transport);
+    const frames = new FrameReader(clientReader);
+
+    const reqP = conn.request({ path: "/x", authority: "e" });
+    reqP.catch(() => {});
+    await frames.until((f) => f.type === FrameType.HEADERS);
+    void frames.drain();
+    expect(conn.goaway).toBeUndefined();
+
+    const reason = '{"reason":"TooManyProviderTokenUpdates"}';
+    await serverWriter.write(
+      serializeFrame({
+        type: FrameType.GOAWAY,
+        streamId: 0,
+        lastStreamId: 0,
+        errorCode: 11,
+        debugData: encodeUtf8(reason),
+      }),
+    );
+
+    const err = await reqP.then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(H2Error);
+    const h2 = err as H2Error;
+    expect(h2.code).toBe("ENHANCE_YOUR_CALM");
+    expect(h2.message).toContain(reason);
+    expect(decodeUtf8(h2.debugData!)).toBe(reason);
+    expect(conn.goaway?.errorCode).toBe(11);
+    expect(conn.goaway?.lastStreamId).toBe(0);
+    expect(decodeUtf8(conn.goaway!.debugData)).toBe(reason);
+  }, 3000);
+
+  it("records a graceful GOAWAY that fails no stream", async () => {
+    const { transport, clientReader, serverWriter } = mockTransport();
+    const conn = connect(transport);
+    void new FrameReader(clientReader).drain();
+
+    await serverWriter.write(
+      serializeFrame({
+        type: FrameType.GOAWAY,
+        streamId: 0,
+        lastStreamId: 0,
+        errorCode: 0,
+        debugData: encodeUtf8('{"reason":"Shutdown"}'),
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 15));
+
+    expect(conn.isClosed).toBe(false);
+    expect(decodeUtf8(conn.goaway!.debugData)).toBe('{"reason":"Shutdown"}');
+    await expect(conn.request({ path: "/x", authority: "e" })).rejects.toThrow("going away");
+  }, 3000);
 });
 
 describe("receive path: RST mid-download + trailers", () => {

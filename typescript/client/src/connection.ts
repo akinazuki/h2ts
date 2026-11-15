@@ -12,6 +12,7 @@ import type { Transport } from "./transport/transport.js";
 import type {
   BodyInit,
   ConnectOptions,
+  GoAwayInfo,
   H2RequestInit,
   H2Response,
   HeadersInit,
@@ -24,6 +25,7 @@ const EMPTY = new Uint8Array(0);
 // Cap on the accumulated header block (HEADERS + CONTINUATION) so an endless
 // CONTINUATION stream can't exhaust memory (RFC 9113 §10.5.1 / CVE-2024-27316).
 const MAX_HEADER_BLOCK_SIZE = 1 << 20; // 1 MiB — far above any real header block
+const MAX_DEBUG_DATA_IN_MESSAGE = 256;
 
 // Headers that are connection-specific and MUST NOT appear in HTTP/2 (§8.1.2.2).
 const FORBIDDEN_HEADERS = new Set([
@@ -95,6 +97,7 @@ export class H2Connection {
   private closedFlag = false;
   private closeError: unknown;
   private goawayReceived = false;
+  private lastGoAway: GoAwayInfo | undefined;
   private highestPromised = 0;
 
   readonly ready: Promise<void>;
@@ -149,6 +152,11 @@ export class H2Connection {
 
   get isClosed(): boolean {
     return this.closedFlag;
+  }
+
+  /** The most recent GOAWAY the peer sent, if any. */
+  get goaway(): GoAwayInfo | undefined {
+    return this.lastGoAway;
   }
 
   // --- write path (ordered, with optional backpressure) ---
@@ -315,7 +323,20 @@ export class H2Connection {
 
       case FrameType.GOAWAY: {
         this.goawayReceived = true;
-        const err = new H2Error(errorCodeName(frame.errorCode) ?? "NO_ERROR", "peer sent GOAWAY");
+        this.lastGoAway = {
+          errorCode: frame.errorCode,
+          lastStreamId: frame.lastStreamId,
+          debugData: frame.debugData,
+        };
+        const hasDebugData = frame.debugData.length > 0;
+        const err = new H2Error(
+          errorCodeName(frame.errorCode) ?? "NO_ERROR",
+          hasDebugData
+            ? `peer sent GOAWAY: ${decodeUtf8(frame.debugData.subarray(0, MAX_DEBUG_DATA_IN_MESSAGE))}`
+            : "peer sent GOAWAY",
+          undefined,
+          hasDebugData ? frame.debugData : undefined,
+        );
         for (const [id, stream] of this.streams) {
           if (id > frame.lastStreamId) {
             stream.fail(err);

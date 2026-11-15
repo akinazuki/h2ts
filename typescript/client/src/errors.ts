@@ -35,11 +35,14 @@ export function errorCodeValue(name: ErrorCodeName): number {
 export class H2Error extends Error {
   readonly code: ErrorCodeName;
   readonly streamId: number | undefined;
+  /** The debug data of the peer's GOAWAY, when the error came from one that carried any. */
+  readonly debugData: Uint8Array | undefined;
 
-  constructor(code: ErrorCodeName, message?: string, streamId?: number) {
+  constructor(code: ErrorCodeName, message?: string, streamId?: number, debugData?: Uint8Array) {
     super(message ? `${code}: ${message}` : code);
     this.name = "H2Error";
     this.code = code;
     this.streamId = streamId;
+    this.debugData = debugData;
   }
 }

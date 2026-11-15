@@ -84,3 +84,13 @@ export interface ConnectOptions {
   /** Called for each server push. If unset, pushes are refused. */
   onPush?: (push: PushedRequest) => void;
 }
+
+/** A GOAWAY frame received from the peer. */
+export interface GoAwayInfo {
+  /** The raw error code (0 = NO_ERROR, a graceful shutdown). */
+  errorCode: number;
+  /** Streams above this id were not processed and are safe to retry. */
+  lastStreamId: number;
+  /** Opaque diagnostic data; some servers put a human- or machine-readable reason here. */
+  debugData: Uint8Array;
+}

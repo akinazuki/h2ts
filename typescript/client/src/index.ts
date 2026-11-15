@@ -23,5 +23,6 @@ export type {
   HeadersInit,
   ConnectOptions,
   ClientSettings,
+  GoAwayInfo,
   PushedRequest,
 } from "./types.js";
