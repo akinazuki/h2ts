@@ -425,6 +425,61 @@ describe("receive path: backpressure", () => {
     if (wu.type === FrameType.WINDOW_UPDATE) expect(wu.windowSizeIncrement).toBe(5);
     expect(connWU5().length).toBe(1); // connection window replenished for the same bytes
   }, 8000);
+
+  it("returns DATA padding to both windows, on a live stream and on an unknown one", async () => {
+    const { transport, clientReader, serverWriter } = mockTransport();
+    const conn = connect(transport);
+    const frames = new FrameReader(clientReader);
+
+    const reqP = conn.request({ path: "/download", authority: "e" });
+    await frames.until((f) => f.type === FrameType.HEADERS);
+
+    const seen: Frame[] = [];
+    void (async () => {
+      try {
+        for (;;) seen.push(await frames.next());
+      } catch {
+        /* closed */
+      }
+    })();
+    const returned = (streamId: number) =>
+      seen.reduce(
+        (n, f) => (f.type === FrameType.WINDOW_UPDATE && f.streamId === streamId ? n + f.windowSizeIncrement : n),
+        0,
+      );
+    const settle = () => new Promise((r) => setTimeout(r, 30));
+
+    // PADDED DATA: Pad Length (1) + data + padding all count against the windows.
+    const paddedData = (streamId: number, data: Uint8Array, padLen: number, endStream: boolean) => {
+      const len = 1 + data.length + padLen;
+      const frame = new Uint8Array(9 + len);
+      frame[1] = (len >> 8) & 0xff;
+      frame[2] = len & 0xff;
+      frame[4] = 0x8 | (endStream ? 0x1 : 0);
+      frame[8] = streamId;
+      frame[9] = padLen;
+      frame.set(data, 10);
+      return frame;
+    };
+
+    await sendResponseHead(serverWriter);
+    await serverWriter.write(paddedData(1, encodeUtf8("hello"), 200, false));
+    const res = await reqP;
+
+    await settle();
+    expect(returned(1)).toBe(201);
+    expect(returned(0)).toBe(201);
+
+    const reader = res.body.getReader();
+    expect(decodeUtf8((await reader.read()).value!)).toBe("hello");
+    await settle();
+    expect(returned(1)).toBe(206);
+    expect(returned(0)).toBe(206);
+
+    await serverWriter.write(paddedData(9, encodeUtf8("stray"), 100, false));
+    await settle();
+    expect(returned(0)).toBe(206 + 106);
+  }, 8000);
 });
 
 describe("receive path: max concurrent streams", () => {

@@ -152,7 +152,13 @@ function parsePayload(
   switch (typeId) {
     case FrameType.DATA: {
       const data = readPadded(r, len, (flags & Flags.DATA_PADDED) !== 0);
-      return { type: FrameType.DATA, streamId, data: data.slice(), endStream: (flags & Flags.DATA_END_STREAM) !== 0 };
+      return {
+        type: FrameType.DATA,
+        streamId,
+        data: data.slice(),
+        endStream: (flags & Flags.DATA_END_STREAM) !== 0,
+        flowControlledLength: len,
+      };
     }
     case FrameType.HEADERS: {
       const padded = (flags & Flags.HEADERS_PADDED) !== 0;

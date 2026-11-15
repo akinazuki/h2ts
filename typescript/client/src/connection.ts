@@ -256,6 +256,7 @@ export class H2Connection {
 
       case FrameType.DATA: {
         const stream = this.streams.get(frame.streamId);
+        const flowControlled = frame.flowControlledLength ?? frame.data.length;
         if (stream) {
           // Buffer; the receive windows are replenished only as the app reads the
           // body (consumption-driven backpressure — see H2Stream/replenishRecvWindow).
@@ -268,10 +269,12 @@ export class H2Connection {
             stream.remoteClosed = true;
             this.retireIfFullyClosed(frame.streamId);
           }
-        } else if (frame.data.length > 0) {
+          // Padding never reaches the consumer, so it is returned on receipt.
+          this.replenishRecvWindow(frame.streamId, flowControlled - frame.data.length);
+        } else if (flowControlled > 0) {
           // DATA on an unknown/retired stream: there is no consumer to drive
           // replenishment, so return the connection window now (bytes discarded).
-          void this.send({ type: FrameType.WINDOW_UPDATE, streamId: 0, windowSizeIncrement: frame.data.length });
+          void this.send({ type: FrameType.WINDOW_UPDATE, streamId: 0, windowSizeIncrement: flowControlled });
         }
         return;
       }

@@ -62,6 +62,9 @@ export interface DataFrame {
   streamId: number;
   data: Uint8Array;
   endStream: boolean;
+  /** Decoded frames only: the payload length flow control counts, i.e. `data`
+   * plus the Pad Length field and padding (§6.1). */
+  flowControlledLength?: number;
 }
 
 export interface HeadersFrame {

@@ -116,6 +116,14 @@ describe("padding", () => {
     if (f.type === FrameType.DATA) expect([...f.data]).toEqual([9, 9]);
     else throw new Error("expected DATA");
   });
+
+  it("reports the whole DATA payload, padding included, as flow-controlled", () => {
+    const padded = new FrameDecoder().push(bytesOf([0, 0, 5, 0, 0x08, 0, 0, 0, 1, 2, 9, 9, 0, 0]))[0]!;
+    const plain = new FrameDecoder().push(bytesOf([0, 0, 2, 0, 0, 0, 0, 0, 1, 9, 9]))[0]!;
+    if (padded.type !== FrameType.DATA || plain.type !== FrameType.DATA) throw new Error("expected DATA");
+    expect(padded.flowControlledLength).toBe(5);
+    expect(plain.flowControlledLength).toBe(2);
+  });
 });
 
 describe("streaming decoder", () => {
