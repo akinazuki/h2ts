@@ -198,11 +198,27 @@ export class HpackDecoder {
 }
 
 /**
- * HPACK encoder (outbound compression context). Stateless: no dynamic table.
+ * HPACK encoder (outbound compression context). It never adds to the dynamic
+ * table, so its only state is the table size it still owes the peer a signal for.
  */
 export class HpackEncoder {
+  private maxTableSize = DEFAULT_TABLE_SIZE;
+  private pendingTableSizeUpdate: number | undefined;
+
+  /** Apply the peer's SETTINGS_HEADER_TABLE_SIZE. A reduction must be signalled
+   * at the start of the next header block (§4.2, §6.3). */
+  setMaxTableSize(size: number): void {
+    if (size >= this.maxTableSize) return;
+    this.maxTableSize = size;
+    this.pendingTableSizeUpdate = size;
+  }
+
   encode(headers: readonly Header[]): Uint8Array {
     const w = new ByteWriter(256);
+    if (this.pendingTableSizeUpdate !== undefined) {
+      writeInteger(w, this.pendingTableSizeUpdate, 5, 0x20);
+      this.pendingTableSizeUpdate = undefined;
+    }
     for (const header of headers) {
       const name = header.name.toLowerCase();
       const value = header.value;

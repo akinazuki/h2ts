@@ -483,6 +483,31 @@ describe("receive path: backpressure", () => {
   }, 8000);
 });
 
+describe("receive path: SETTINGS_HEADER_TABLE_SIZE", () => {
+  it("opens the next header block with a table size update after the peer lowers it", async () => {
+    const { transport, clientReader, serverWriter } = mockTransport();
+    const conn = connect(transport);
+    const frames = new FrameReader(clientReader);
+
+    await serverWriter.write(
+      serializeFrame({ type: FrameType.SETTINGS, streamId: 0, ack: false, settings: { headerTableSize: 0 } }),
+    );
+    await frames.until((f) => f.type === FrameType.SETTINGS && f.ack === true);
+
+    conn.request({ path: "/a", authority: "e" }).catch(() => {});
+    const first = await frames.until((f) => f.type === FrameType.HEADERS);
+    conn.request({ path: "/b", authority: "e" }).catch(() => {});
+    const second = await frames.until((f) => f.type === FrameType.HEADERS);
+    if (first.type !== FrameType.HEADERS || second.type !== FrameType.HEADERS) throw new Error("expected HEADERS");
+
+    expect(first.headerBlockFragment[0]).toBe(0x20);
+    expect(second.headerBlockFragment[0]).not.toBe(0x20);
+    const decoder = new HpackDecoder();
+    expect(decoder.decode(first.headerBlockFragment).find((h) => h.name === ":path")?.value).toBe("/a");
+    expect(decoder.decode(second.headerBlockFragment).find((h) => h.name === ":path")?.value).toBe("/b");
+  }, 3000);
+});
+
 describe("receive path: max concurrent streams", () => {
   it("honors the peer's SETTINGS_MAX_CONCURRENT_STREAMS", async () => {
     const { transport, clientReader, serverWriter } = mockTransport();

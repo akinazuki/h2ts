@@ -137,3 +137,38 @@ describe("HPACK encoder <-> decoder round-trip", () => {
     expect(pairs(decoded)).toEqual([["x-mixed-case", "v"]]);
   });
 });
+
+describe("HPACK encoder: dynamic table size update (RFC 7541 §4.2)", () => {
+  const method = [{ name: ":method", value: "GET" }];
+
+  it("signals a lowered table size once, at the start of the next block", () => {
+    const enc = new HpackEncoder();
+    enc.setMaxTableSize(0);
+    const first = enc.encode(method);
+    expect([...first]).toEqual([0x20, 0x82]);
+    expect([...enc.encode(method)]).toEqual([0x82]);
+    expect(pairs(new HpackDecoder().decode(first))).toEqual([[":method", "GET"]]);
+  });
+
+  it("signals the smallest size when the peer lowers it more than once", () => {
+    const enc = new HpackEncoder();
+    enc.setMaxTableSize(1024);
+    enc.setMaxTableSize(100);
+    expect([...enc.encode(method)]).toEqual([0x3f, 0x45, 0x82]);
+  });
+
+  it("stays at the lowered size when the peer raises it again", () => {
+    const enc = new HpackEncoder();
+    enc.setMaxTableSize(0);
+    enc.setMaxTableSize(4096);
+    expect([...enc.encode(method)]).toEqual([0x20, 0x82]);
+    expect([...enc.encode(method)]).toEqual([0x82]);
+  });
+
+  it("says nothing when the size is not lowered", () => {
+    const enc = new HpackEncoder();
+    enc.setMaxTableSize(4096);
+    enc.setMaxTableSize(65536);
+    expect([...enc.encode(method)]).toEqual([0x82]);
+  });
+});

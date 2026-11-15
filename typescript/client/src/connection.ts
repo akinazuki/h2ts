@@ -398,7 +398,10 @@ export class H2Connection {
       }
       this.remote.maxFrameSize = s.maxFrameSize;
     }
-    if (s.headerTableSize !== undefined) this.remote.headerTableSize = s.headerTableSize;
+    if (s.headerTableSize !== undefined) {
+      this.remote.headerTableSize = s.headerTableSize;
+      this.encoder.setMaxTableSize(s.headerTableSize);
+    }
     if (s.enablePush !== undefined) this.remote.enablePush = s.enablePush;
     if (s.maxConcurrentStreams !== undefined) {
       this.remote.maxConcurrentStreams = s.maxConcurrentStreams;
