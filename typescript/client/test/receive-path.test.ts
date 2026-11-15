@@ -541,6 +541,58 @@ describe("receive path: RST_STREAM", () => {
 
     await expect(reqP).rejects.toThrow();
   }, 8000);
+
+  it("keeps a complete response when the peer then sends RST_STREAM(NO_ERROR)", async () => {
+    const { transport, clientReader, serverWriter } = mockTransport();
+    const conn = connect(transport);
+    const frames = new FrameReader(clientReader);
+
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        controller.enqueue(encodeUtf8("part1"));
+        await new Promise(() => {});
+      },
+    });
+    const reqP = conn.request({ method: "POST", path: "/upload", authority: "e", body });
+    await frames.until((f) => f.type === FrameType.DATA);
+    void frames.drain();
+
+    await sendResponseHead(serverWriter);
+    await serverWriter.write(
+      serializeFrame({ type: FrameType.DATA, streamId: 1, data: encodeUtf8("done"), endStream: true }),
+    );
+    await serverWriter.write(
+      serializeFrame({ type: FrameType.RST_STREAM, streamId: 1, errorCode: 0 }),
+    );
+
+    const res = await reqP;
+    expect(res.status).toBe(200);
+    await new Promise((r) => setTimeout(r, 15));
+    expect(conn.activeStreams).toBe(0);
+    expect(await res.text()).toBe("done");
+  }, 3000);
+
+  it("still errors the body on RST_STREAM(NO_ERROR) before the response is complete", async () => {
+    const { transport, clientReader, serverWriter } = mockTransport();
+    const conn = connect(transport);
+    const frames = new FrameReader(clientReader);
+
+    const reqP = conn.request({ path: "/x", authority: "e" });
+    await frames.until((f) => f.type === FrameType.HEADERS);
+    void frames.drain();
+
+    await sendResponseHead(serverWriter);
+    await serverWriter.write(
+      serializeFrame({ type: FrameType.DATA, streamId: 1, data: encodeUtf8("one"), endStream: false }),
+    );
+    await serverWriter.write(
+      serializeFrame({ type: FrameType.RST_STREAM, streamId: 1, errorCode: 0 }),
+    );
+
+    const res = await reqP;
+    expect(res.status).toBe(200);
+    await expect(res.text()).rejects.toThrow();
+  }, 3000);
 });
 
 describe("receive path: GOAWAY", () => {

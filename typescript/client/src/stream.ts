@@ -144,6 +144,12 @@ export class H2Stream {
   }
 
   receiveReset(errorCode: number): void {
+    // §8.1: NO_ERROR after a complete response only tells us to stop uploading.
+    if (errorCode === 0 && this.gotHead && this.remoteClosed) {
+      this.state = "closed";
+      this.sendWindow.close();
+      return;
+    }
     const name = errorCodeName(errorCode) ?? "PROTOCOL_ERROR";
     const err = new H2Error(name, `stream ${this.id} reset by peer`, this.id);
     this.fail(err);
